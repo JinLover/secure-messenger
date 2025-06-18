@@ -6,6 +6,8 @@ import time
 from typing import List
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 
 from .models import (
     SendMessageRequest,
@@ -16,13 +18,18 @@ from .models import (
     EncryptedMessage
 )
 from .storage import message_storage
+from .security import get_security_stats
 from crypto.nacl_wrapper import generate_message_id
+
+# Rate limiter
+limiter = Limiter(key_func=get_remote_address)
 
 router = APIRouter()
 
 
 @router.post("/send", response_model=SendMessageResponse)
-async def send_message(request: SendMessageRequest):
+@limiter.limit("100/minute")  # Allow 100 messages per minute per IP (10 -> 100)
+async def send_message(request: Request, message_request: SendMessageRequest):
     """
     Send an encrypted message to the server
     
@@ -38,12 +45,12 @@ async def send_message(request: SendMessageRequest):
         # Create encrypted message
         encrypted_message = EncryptedMessage(
             message_id=message_id,
-            token=request.token,
-            ciphertext=request.ciphertext,
-            nonce=request.nonce,
-            sender_public_key=request.sender_public_key,
+            token=message_request.token,
+            ciphertext=message_request.ciphertext,
+            nonce=message_request.nonce,
+            sender_public_key=message_request.sender_public_key,
             timestamp=time.time(),
-            ttl=request.ttl
+            ttl=message_request.ttl
         )
         
         # Store the message
@@ -60,7 +67,8 @@ async def send_message(request: SendMessageRequest):
 
 
 @router.post("/poll", response_model=PollMessagesResponse)
-async def poll_messages(request: PollMessagesRequest):
+@limiter.limit("100/minute")  # Allow 100 polls per minute per IP (300 -> 100)
+async def poll_messages(request: Request, poll_request: PollMessagesRequest):
     """
     Poll for messages using a routing token
     
@@ -70,8 +78,8 @@ async def poll_messages(request: PollMessagesRequest):
     try:
         # Get messages for the token
         messages = message_storage.get_messages(
-            token=request.token,
-            since=request.since,
+            token=poll_request.token,
+            since=poll_request.since,
             delete_after_read=False  # Keep messages for multiple polls
         )
         
@@ -85,7 +93,8 @@ async def poll_messages(request: PollMessagesRequest):
 
 
 @router.post("/consume", response_model=PollMessagesResponse)
-async def consume_messages(request: PollMessagesRequest):
+@limiter.limit("100/minute")  # Allow 100 consume requests per minute per IP (300 -> 100)
+async def consume_messages(request: Request, consume_request: PollMessagesRequest):
     """
     Consume messages (poll and delete)
     
@@ -94,8 +103,8 @@ async def consume_messages(request: PollMessagesRequest):
     try:
         # Get and delete messages for the token
         messages = message_storage.get_messages(
-            token=request.token,
-            since=request.since,
+            token=consume_request.token,
+            since=consume_request.since,
             delete_after_read=True  # Delete after reading
         )
         
@@ -109,7 +118,8 @@ async def consume_messages(request: PollMessagesRequest):
 
 
 @router.get("/status", response_model=ServerStatusResponse)
-async def get_server_status():
+@limiter.limit("60/minute")  # Allow 60 status checks per minute per IP (5 -> 60)
+async def get_server_status(request: Request):
     """
     Get server status and statistics
     
@@ -117,6 +127,7 @@ async def get_server_status():
     """
     try:
         stats = message_storage.get_stats()
+        security_stats = get_security_stats()
         
         return ServerStatusResponse(
             status="healthy",
@@ -125,7 +136,8 @@ async def get_server_status():
             total_messages=stats["total_messages"],
             active_tokens=stats["active_tokens"],
             auto_cleanup_enabled=True,
-            default_ttl_minutes=30
+            default_ttl_minutes=30,
+            security=security_stats
         )
         
     except Exception as e:
@@ -133,7 +145,8 @@ async def get_server_status():
 
 
 @router.get("/health")
-async def health_check():
+@limiter.limit("120/minute")  # Allow 120 health checks per minute per IP (10 -> 120)
+async def health_check(request: Request):
     """
     Simple health check endpoint
     """

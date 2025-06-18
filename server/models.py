@@ -3,7 +3,7 @@ Data models for the secure messenger server
 """
 
 import time
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 from pydantic import BaseModel, Field
 
 
@@ -78,4 +78,5 @@ class ServerStatusResponse(BaseModel):
     total_messages: int
     active_tokens: int
     auto_cleanup_enabled: bool = Field(default=True, description="Whether automatic message cleanup is enabled")
-    default_ttl_minutes: int = Field(default=30, description="Default TTL for messages in minutes") 
+    default_ttl_minutes: int = Field(default=30, description="Default TTL for messages in minutes")
+    security: Optional[Dict[str, Any]] = Field(default=None, description="Security statistics") 

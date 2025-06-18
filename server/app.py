@@ -14,9 +14,12 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
 
 from .routes import router
 from .storage import message_storage
+from .security import security_middleware, limiter, get_security_stats
 
 
 # Startup and shutdown events
@@ -52,6 +55,10 @@ app = FastAPI(
     redoc_url="/redoc"
 )
 
+# Add rate limiting support
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
 # Configure CORS for web clients
 app.add_middleware(
     CORSMiddleware,
@@ -62,19 +69,21 @@ app.add_middleware(
 )
 
 
-# Security middleware
+# Security middleware (comprehensive protection)
 @app.middleware("http")
-async def security_headers(request: Request, call_next):
+async def comprehensive_security_middleware(request: Request, call_next):
     """
-    Add security headers to all responses
+    Comprehensive security middleware combining multiple protections
     """
-    response = await call_next(request)
+    # Apply security checks first
+    response = await security_middleware(request, call_next)
     
-    # Basic security headers
+    # Add security headers
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["X-XSS-Protection"] = "1; mode=block"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Server"] = "SecureMessenger/1.0"  # Hide server details
     
     return response
 
