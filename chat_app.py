@@ -73,10 +73,9 @@ class SecureChatApp:
             
             print("✅ 키 생성 완료!")
             print(f"📄 공개키: {public_key}")
-            print(f"🏷️ 토큰: {self.crypto.get_token()}")
             print(f"📤 공개키 파일: keys/public_key.txt")
             print()
-            print("💡 다른 사람에게 공개키를 공유하여 채팅을 시작하세요.")
+            print("💡 다른 사람에게 위 공개키를 공유하여 채팅을 시작하세요!")
             
         except Exception as e:
             print(f"❌ 키 생성 실패: {e}")
@@ -189,7 +188,7 @@ class SecureChatApp:
             self.clear_screen()
             self.print_header()
             print(f"💬 {room.name}")
-            print(f"🔑 상대방: {room.peer_public_key[:16]}...")
+            print(f"🔑 상대방 공개키: {room.peer_public_key}")
             print("-" * 50)
             
             # 메시지 히스토리 표시 (최근 20개)
@@ -312,8 +311,8 @@ class SecureChatApp:
             has_keys = self.check_keys()
             
             if has_keys:
-                print(f"🔑 현재 공개키: {self.crypto.get_public_key()[:16]}...")
-                print(f"🏷️ 토큰: {self.crypto.get_token()[:16]}...")
+                print(f"🔑 현재 공개키: {self.crypto.get_public_key()}")
+                print("💡 이 공개키를 상대방에게 공유하세요!")
             else:
                 print("❌ 키가 없습니다. 먼저 키를 생성해주세요.")
             
