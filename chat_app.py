@@ -56,6 +56,16 @@ class SecureChatApp:
         """키 파일 존재 여부 확인"""
         return self.crypto.load_keys()
     
+    async def check_server_connection(self) -> bool:
+        """서버 연결 상태 확인"""
+        try:
+            import httpx
+            async with httpx.AsyncClient() as client:
+                response = await client.get(f"{self.server_url}/", timeout=5.0)
+                return response.status_code == 200
+        except:
+            return False
+    
     def generate_keys_menu(self):
         """키 생성 메뉴"""
         self.clear_screen()
@@ -264,7 +274,8 @@ class SecureChatApp:
     
     def background_receiver(self):
         """백그라운드에서 메시지 수신"""
-        print("🔄 백그라운드 메시지 수신 시작...")
+        consecutive_errors = 0
+        max_consecutive_errors = 3
         
         while self.running:
             try:
@@ -279,6 +290,9 @@ class SecureChatApp:
                     
                     try:
                         messages = loop.run_until_complete(self.receiver.poll_messages())
+                        
+                        # 성공 시 에러 카운터 리셋
+                        consecutive_errors = 0
                         
                         for msg in messages:
                             # 어느 채팅방에서 온 메시지인지 확인 (발신자 공개키 기반)
@@ -299,9 +313,24 @@ class SecureChatApp:
                 time.sleep(1)  # 1초 주기로 폴링
                 
             except Exception as e:
-                if self.running:  # 정상 종료가 아닌 경우만 에러 출력
-                    print(f"⚠️ 백그라운드 수신 오류: {e}")
-                time.sleep(5)  # 오류 시 5초 대기
+                if self.running:  # 정상 종료가 아닌 경우만 처리
+                    consecutive_errors += 1
+                    
+                    # 처음 몇 번의 에러만 출력하고, 그 후에는 조용히 처리
+                    if consecutive_errors <= max_consecutive_errors:
+                        if "connection" in str(e).lower() or "failed" in str(e).lower():
+                            # 서버 연결 실패는 조용히 처리 (서버가 실행되지 않은 상태)
+                            pass
+                        else:
+                            print(f"⚠️ 백그라운드 수신 오류: {e}")
+                    
+                    # 연속 에러가 많으면 대기 시간 증가
+                    if consecutive_errors <= 3:
+                        time.sleep(2)  # 처음에는 2초 대기
+                    else:
+                        time.sleep(10)  # 계속 실패하면 10초 대기
+                else:
+                    break
     
     def main_menu(self):
         """메인 메뉴"""
@@ -311,6 +340,13 @@ class SecureChatApp:
             
             # 키 상태 확인
             has_keys = self.check_keys()
+            
+            # 서버 상태 확인
+            server_online = asyncio.run(self.check_server_connection())
+            if server_online:
+                print("🟢 서버 연결: 정상")
+            else:
+                print("🔴 서버 연결: 오프라인")
             
             if has_keys:
                 print(f"🔑 현재 공개키: {self.crypto.get_public_key()}")
