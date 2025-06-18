@@ -137,11 +137,11 @@ class MessageStorage:
     async def _cleanup_expired_messages(self):
         """
         Background task to clean up expired messages
-        Runs every 60 seconds
+        Runs every 30 seconds for faster cleanup
         """
         while True:
             try:
-                await asyncio.sleep(60)  # Clean up every minute
+                await asyncio.sleep(30)  # Clean up every 30 seconds
                 current_time = time.time()
                 
                 with self._lock:

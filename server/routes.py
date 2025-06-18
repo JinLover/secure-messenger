@@ -123,7 +123,9 @@ async def get_server_status():
             version="0.1.0",
             uptime_seconds=stats["uptime_seconds"],
             total_messages=stats["total_messages"],
-            active_tokens=stats["active_tokens"]
+            active_tokens=stats["active_tokens"],
+            auto_cleanup_enabled=True,
+            default_ttl_minutes=30
         )
         
     except Exception as e:

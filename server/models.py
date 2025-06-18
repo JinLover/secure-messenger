@@ -29,7 +29,7 @@ class SendMessageRequest(BaseModel):
     ciphertext: str = Field(..., description="Encrypted message content as hex")
     nonce: str = Field(..., description="Encryption nonce as hex")
     sender_public_key: str = Field(..., description="Sender's ephemeral public key as hex")
-    ttl: Optional[int] = Field(default=3600, description="Message TTL in seconds (default: 1 hour)")
+    ttl: Optional[int] = Field(default=1800, description="Message TTL in seconds (default: 30 minutes)")
 
 
 class PollMessagesRequest(BaseModel):
@@ -76,4 +76,6 @@ class ServerStatusResponse(BaseModel):
     version: str
     uptime_seconds: float
     total_messages: int
-    active_tokens: int 
+    active_tokens: int
+    auto_cleanup_enabled: bool = Field(default=True, description="Whether automatic message cleanup is enabled")
+    default_ttl_minutes: int = Field(default=30, description="Default TTL for messages in minutes") 
