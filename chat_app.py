@@ -31,6 +31,8 @@ class SecureChatApp:
         self.crypto = ClientCrypto()
         self.sender = MessageSender(server_url)
         self.receiver = MessageReceiver(server_url)
+        # receiver가 같은 crypto 인스턴스를 사용하도록 설정
+        self.receiver.crypto = self.crypto
         self.chat_manager = ChatManager()
         
         # 백그라운드 수신 제어
