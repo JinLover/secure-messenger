@@ -21,10 +21,11 @@ def generate_keypair() -> Tuple[str, str]:
     private_key = PrivateKey.generate()
     public_key = private_key.public_key
     
-    return (
-        private_key.encode(encoder=HexEncoder).decode(),
-        public_key.encode(encoder=HexEncoder).decode()
-    )
+    # Convert to hex strings
+    private_key_hex = bytes(private_key).hex()
+    public_key_hex = bytes(public_key).hex()
+    
+    return (private_key_hex, public_key_hex)
 
 
 def encrypt_message(recipient_public_key_hex: str, plaintext: str) -> Dict[str, Any]:
@@ -38,31 +39,42 @@ def encrypt_message(recipient_public_key_hex: str, plaintext: str) -> Dict[str, 
     Returns:
         Dict containing encrypted message components
     """
-    # Generate ephemeral keypair for this message (Perfect Forward Secrecy)
-    sender_private_key = PrivateKey.generate()
-    sender_public_key = sender_private_key.public_key
-    
-    # Decode recipient's public key
-    recipient_public_key = PublicKey(
-        recipient_public_key_hex, encoder=HexEncoder
-    )
-    
-    # Create box for encryption
-    box = Box(sender_private_key, recipient_public_key)
-    
-    # Encrypt the message
-    encrypted = box.encrypt(plaintext.encode('utf-8'))
-    
-    # Generate routing token (hash of recipient's public key)
-    token = generate_token(recipient_public_key_hex)
-    
-    return {
-        "token": token,
-        "ciphertext": encrypted.ciphertext.hex(),
-        "nonce": encrypted.nonce.hex(),
-        "sender_public_key": sender_public_key.encode(encoder=HexEncoder).decode(),
-        "timestamp": None  # Server will add timestamp
-    }
+    try:
+        # Generate ephemeral keypair for this message (Perfect Forward Secrecy)
+        sender_private_key = PrivateKey.generate()
+        sender_public_key = sender_private_key.public_key
+        
+        # Decode recipient's public key
+        recipient_public_key_bytes = bytes.fromhex(recipient_public_key_hex)
+        recipient_public_key = PublicKey(recipient_public_key_bytes)
+        
+        # Create box for encryption
+        box = Box(sender_private_key, recipient_public_key)
+        
+        # Ensure plaintext is properly encoded to bytes
+        if isinstance(plaintext, str):
+            plaintext_bytes = plaintext.encode('utf-8')
+        else:
+            plaintext_bytes = plaintext
+        
+        # Encrypt the message
+        encrypted = box.encrypt(plaintext_bytes)
+        
+        # Generate routing token (hash of recipient's public key)
+        token = generate_token(recipient_public_key_hex)
+        
+        # Convert sender public key to hex
+        sender_public_key_hex = bytes(sender_public_key).hex()
+        
+        return {
+            "token": token,
+            "ciphertext": encrypted.ciphertext.hex(),
+            "nonce": encrypted.nonce.hex(),
+            "sender_public_key": sender_public_key_hex,
+            "timestamp": None  # Server will add timestamp
+        }
+    except Exception as e:
+        raise ValueError(f"Encryption failed: {str(e)}")
 
 
 def decrypt_message(
@@ -83,25 +95,27 @@ def decrypt_message(
     Returns:
         Decrypted plaintext message
     """
-    # Decode keys
-    recipient_private_key = PrivateKey(
-        recipient_private_key_hex, encoder=HexEncoder
-    )
-    sender_public_key = PublicKey(
-        sender_public_key_hex, encoder=HexEncoder
-    )
-    
-    # Create box for decryption
-    box = Box(recipient_private_key, sender_public_key)
-    
-    # Decode encrypted components
-    nonce = bytes.fromhex(nonce_hex)
-    ciphertext = bytes.fromhex(ciphertext_hex)
-    
-    # Decrypt the message
-    decrypted = box.decrypt(ciphertext, nonce)
-    
-    return decrypted.decode('utf-8')
+    try:
+        # Decode keys from hex
+        recipient_private_key_bytes = bytes.fromhex(recipient_private_key_hex)
+        recipient_private_key = PrivateKey(recipient_private_key_bytes)
+        
+        sender_public_key_bytes = bytes.fromhex(sender_public_key_hex)
+        sender_public_key = PublicKey(sender_public_key_bytes)
+        
+        # Create box for decryption
+        box = Box(recipient_private_key, sender_public_key)
+        
+        # Decode encrypted components
+        nonce = bytes.fromhex(nonce_hex)
+        ciphertext = bytes.fromhex(ciphertext_hex)
+        
+        # Decrypt the message
+        decrypted = box.decrypt(ciphertext, nonce)
+        
+        return decrypted.decode('utf-8')
+    except Exception as e:
+        raise ValueError(f"Decryption failed: {str(e)}")
 
 
 def generate_token(public_key_hex: str) -> str:
