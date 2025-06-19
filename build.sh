@@ -46,7 +46,7 @@ if [[ "$1" == "--clean" ]]; then
 fi
 
 # Nuitka 빌드 실행
-python -m nuitka \
+uv run python -m nuitka \
     --onefile \
     --standalone \
     --enable-plugin=tk-inter \
