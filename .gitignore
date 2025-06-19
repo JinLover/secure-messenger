@@ -13,6 +13,9 @@ wheels/
 # Virtual environments
 .venv
 
+# Environment variables
+.env
+
 # Archive/legacy files
 _archive_*
 
