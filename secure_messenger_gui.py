@@ -222,16 +222,19 @@ class EmbeddedCrypto:
     def encrypt_for_recipient(self, recipient_public_key: str, message: str):
         """수신자용 메시지 암호화"""
         try:
-            # 임시 키 쌍 생성
+            # 임시 키 쌍 생성 (Forward Secrecy를 위해)
             ephemeral_private = nacl.public.PrivateKey.generate()
             ephemeral_public = ephemeral_private.public_key
+            
+            # 실제 발신자 정보를 메시지에 포함
+            message_with_sender = f"{self.public_key}|{message}"
             
             # 수신자 공개키로 박스 생성
             recipient_key = nacl.public.PublicKey(recipient_public_key, encoder=nacl.encoding.HexEncoder)
             box = nacl.public.Box(ephemeral_private, recipient_key)
             
             # 메시지 암호화
-            encrypted = box.encrypt(message.encode('utf-8'))
+            encrypted = box.encrypt(message_with_sender.encode('utf-8'))
             
             # 라우팅 토큰 생성
             token = hashlib.sha256(recipient_key.encode()).hexdigest()[:16]
@@ -279,6 +282,7 @@ class EmbeddedSender:
     def __init__(self, server_url: str = "http://149.28.109.11:8000"):
         self.server_url = server_url.rstrip('/')
         self.crypto = EmbeddedCrypto()
+        self.crypto.load_keys()  # 키 로드
 
     async def send_message(self, recipient_public_key: str, message: str, ttl: int = 3600):
         """메시지 전송 (urllib 전용)"""
@@ -318,6 +322,7 @@ class EmbeddedReceiver:
     def __init__(self, server_url: str = "http://149.28.109.11:8000"):
         self.server_url = server_url.rstrip('/')
         self.crypto = EmbeddedCrypto()
+        self.crypto.load_keys()  # 키 로드
 
     async def poll_messages(self, since: Optional[float] = None):
         """메시지 폴링 (urllib 전용)"""
@@ -358,11 +363,27 @@ class EmbeddedReceiver:
                         msg["ciphertext"]
                     )
                     
+                    # 메시지에서 실제 발신자 공개키 추출
+                    if "|" in plaintext:
+                        actual_sender_key, actual_message = plaintext.split("|", 1)
+                        
+                        # 유효한 공개키인지 검증 (64자 16진수)
+                        if len(actual_sender_key) == 64:
+                            try:
+                                int(actual_sender_key, 16)  # 16진수 검증
+                            except ValueError:
+                                continue  # 잘못된 형식이면 메시지 무시
+                        else:
+                            continue  # 잘못된 길이면 메시지 무시
+                    else:
+                        # 파싱되지 않은 메시지는 무시
+                        continue
+                    
                     decrypted_messages.append({
                         "message_id": msg["message_id"],
-                        "message": plaintext,
+                        "message": actual_message,
                         "timestamp": msg["timestamp"],
-                        "sender_public_key": msg["sender_public_key"]
+                        "sender_public_key": actual_sender_key
                     })
                 except Exception:
                     continue
@@ -490,9 +511,14 @@ class EmbeddedChatManager:
 
     def add_incoming_message(self, peer_public_key: str, content: str, message_id: str, sender_public_key: str, timestamp: float):
         """수신 메시지 추가 (중복 체크 포함)"""
+        # 발신자의 공개키가 채팅방의 peer_public_key와 일치하는지 확인
         room_id = peer_public_key[:8]
         room = self.chat_rooms.get(room_id)
         if not room:
+            return False
+        
+        # 채팅방의 peer_public_key와 메시지의 sender_public_key가 일치하는지 확인
+        if room["peer_public_key"] != sender_public_key:
             return False
         
         # 중복 메시지 체크
@@ -525,6 +551,14 @@ class EmbeddedChatManager:
             messages = messages[-limit:]
         
         return messages
+
+    def delete_chat_room(self, room_id: str):
+        """채팅방 삭제"""
+        if room_id in self.chat_rooms:
+            del self.chat_rooms[room_id]
+            self.save_chat_rooms()
+            return True
+        return False
 
     def get_peer_public_keys(self):
         """상대방 공개키 목록 반환"""
@@ -608,16 +642,32 @@ class SecureMessengerGUI:
         self.server_status_label.pack(pady=10)
         
         if has_keys:
+            # 공개키 표시 프레임
+            key_display_frame = ctk.CTkFrame(self.status_frame)
+            key_display_frame.pack(fill="x", pady=5, padx=10)
+            
+            # 공개키 정보 라벨
+            my_public_key = self.crypto.get_public_key()
             self.key_status_label = ctk.CTkLabel(
-                self.status_frame,
-                text=f"🔑 공개키: {self.crypto.get_public_key()}",
+                key_display_frame,
+                text=f"🔑 공개키: {my_public_key}",
                 font=ctk.CTkFont(size=12)
             )
-            self.key_status_label.pack(pady=5)
+            self.key_status_label.pack(pady=(10, 5))
+            
+            # 복사 버튼
+            copy_button = ctk.CTkButton(
+                key_display_frame,
+                text="📋 공개키 복사",
+                command=lambda: self.copy_to_clipboard(my_public_key, "내 공개키가 클립보드에 복사되었습니다!"),
+                font=ctk.CTkFont(size=12),
+                height=30
+            )
+            copy_button.pack(pady=(5, 10))
             
             self.share_label = ctk.CTkLabel(
                 self.status_frame,
-                text="💡 이 공개키를 상대방에게 공유하세요!",
+                text="💡 위 공개키를 상대방에게 공유하세요!",
                 font=ctk.CTkFont(size=11)
             )
             self.share_label.pack(pady=5)
@@ -865,13 +915,30 @@ class SecureMessengerGUI:
         room_frame = ctk.CTkFrame(self.chat_list_scroll)
         room_frame.pack(fill="x", pady=5)
         
+        # 헤더 프레임 (제목과 삭제 버튼)
+        header_frame = ctk.CTkFrame(room_frame)
+        header_frame.pack(fill="x", padx=10, pady=(10, 5))
+        
         room_name = ctk.CTkLabel(
-            room_frame,
+            header_frame,
             text=f"💬 {room['name']}",
             font=ctk.CTkFont(size=14, weight="bold"),
             anchor="w"
         )
-        room_name.pack(fill="x", padx=10, pady=(10, 5))
+        room_name.pack(side="left", fill="x", expand=True)
+        
+        # 삭제 버튼
+        delete_button = ctk.CTkButton(
+            header_frame,
+            text="🗑️",
+            width=30,
+            height=25,
+            font=ctk.CTkFont(size=12),
+            fg_color="red",
+            hover_color="darkred",
+            command=lambda r=room: self.delete_chat_room(r)
+        )
+        delete_button.pack(side="right")
         
         last_message_text = ""
         if room["messages"]:
@@ -1012,6 +1079,112 @@ class SecureMessengerGUI:
         
         key_entry.focus()
         
+    def delete_chat_room(self, room):
+        """채팅방 삭제 확인 및 실행"""
+        result = messagebox.askyesno(
+            "채팅방 삭제", 
+            f"정말로 '{room['name']}' 채팅방을 삭제하시겠습니까?\n\n모든 메시지가 영구적으로 삭제됩니다.",
+            icon="warning"
+        )
+        
+        if result:
+            try:
+                success = self.chat_manager.delete_chat_room(room['room_id'])
+                if success:
+                    # 현재 선택된 채팅방이라면 해제
+                    if self.current_room and self.current_room['room_id'] == room['room_id']:
+                        self.current_room = None
+                        for widget in self.chat_panel.winfo_children():
+                            widget.destroy()
+                    
+                    self.refresh_chat_list()
+                    messagebox.showinfo("삭제 완료", f"✅ '{room['name']}' 채팅방이 삭제되었습니다.")
+                else:
+                    messagebox.showerror("삭제 실패", "❌ 채팅방 삭제에 실패했습니다.")
+            except Exception as e:
+                messagebox.showerror("오류", f"❌ 삭제 중 오류가 발생했습니다: {e}")
+        
+    def copy_to_clipboard(self, text: str, success_message: str = "클립보드에 복사되었습니다!"):
+        """텍스트를 클립보드에 복사"""
+        try:
+            self.root.clipboard_clear()
+            self.root.clipboard_append(text)
+            self.root.update()  # 클립보드 업데이트 확인
+            
+            # 성공 메시지 표시 (짧은 시간 후 자동 사라지는 토스트 스타일)
+            self.show_toast_message(success_message)
+            
+        except Exception as e:
+            messagebox.showerror("오류", f"클립보드 복사 실패: {e}")
+    
+    def show_toast_message(self, message: str):
+        """토스트 메시지 표시 (자동으로 사라짐)"""
+        # 간단한 성공 메시지박스 사용
+        messagebox.showinfo("복사 완료", message)
+    
+    def show_peer_key_dialog(self, peer_public_key: str):
+        """상대방 공개키 전체 보기 다이얼로그"""
+        dialog = ctk.CTkToplevel(self.root)
+        dialog.title("🔑 공개키 정보")
+        dialog.geometry("600x400")
+        dialog.transient(self.root)
+        dialog.grab_set()
+        
+        dialog.geometry("+%d+%d" % (
+            self.root.winfo_rootx() + 100,
+            self.root.winfo_rooty() + 100
+        ))
+        
+        content_frame = ctk.CTkFrame(dialog)
+        content_frame.pack(fill="both", expand=True, padx=20, pady=20)
+        
+        title_label = ctk.CTkLabel(
+            content_frame,
+            text="🔑 상대방 공개키",
+            font=ctk.CTkFont(size=20, weight="bold")
+        )
+        title_label.pack(pady=(0, 20))
+        
+        # 공개키 텍스트박스
+        key_textbox = ctk.CTkTextbox(
+            content_frame,
+            height=200,
+            font=ctk.CTkFont(size=12, family="monospace"),
+            wrap="char"
+        )
+        key_textbox.pack(fill="both", expand=True, pady=(0, 20))
+        
+        # 공개키 텍스트 삽입
+        key_textbox.insert("1.0", peer_public_key)
+        key_textbox.configure(state="disabled")  # 읽기 전용
+        
+        # 버튼 프레임
+        button_frame = ctk.CTkFrame(content_frame)
+        button_frame.pack(fill="x")
+        
+        copy_button = ctk.CTkButton(
+            button_frame,
+            text="📋 복사",
+            command=lambda: [
+                self.copy_to_clipboard(peer_public_key, "상대방 공개키가 클립보드에 복사되었습니다!"),
+                dialog.destroy()
+            ],
+            font=ctk.CTkFont(size=14),
+            height=40
+        )
+        copy_button.pack(side="left", padx=(0, 10), fill="x", expand=True)
+        
+        close_button = ctk.CTkButton(
+            button_frame,
+            text="❌ 닫기",
+            command=dialog.destroy,
+            font=ctk.CTkFont(size=14),
+            height=40,
+            fg_color="gray",
+            hover_color="darkgray"
+        )
+        close_button.pack(side="right", fill="x", expand=True)
+        
     def select_chat_room(self, room):
         """채팅방 선택"""
         self.current_room = room
@@ -1035,13 +1208,19 @@ class SecureMessengerGUI:
         )
         room_title.pack(side="left", padx=10, pady=10)
         
-        key_info = ctk.CTkLabel(
+        # 오른쪽에 공개키 복사 버튼만
+        copy_key_button = ctk.CTkButton(
             header_frame,
-            text=f"🔑 {self.current_room['peer_public_key'][:16]}...",
+            text="📋",
+            width=30,
+            height=25,
             font=ctk.CTkFont(size=10),
-            text_color="gray"
+            command=lambda: self.copy_to_clipboard(
+                self.current_room['peer_public_key'], 
+                "상대방 공개키가 클립보드에 복사되었습니다!"
+            )
         )
-        key_info.pack(side="right", padx=10, pady=10)
+        copy_key_button.pack(side="right", padx=10, pady=10)
         
         self.message_frame = ctk.CTkScrollableFrame(self.chat_panel)
         self.message_frame.pack(fill="both", expand=True, padx=10, pady=5)
@@ -1222,17 +1401,40 @@ class SecureMessengerGUI:
                         processed_message_ids = []
                         
                         for msg in messages:
-                            for peer_key in peer_keys:
+                            # 파싱된 실제 발신자 공개키 사용 (poll_messages에서 이미 검증됨)
+                            sender_key = msg['sender_public_key']
+                            
+                            # 채팅방 찾기
+                            target_room = None
+                            for room in self.chat_manager.chat_rooms.values():
+                                if room["peer_public_key"] == sender_key:
+                                    target_room = room
+                                    break
+                            
+                            # 기존 채팅방이 있는 경우
+                            if target_room:
                                 added = self.chat_manager.add_incoming_message(
-                                    peer_key,
+                                    sender_key,
                                     msg['message'],
                                     msg['message_id'],
-                                    msg['sender_public_key'],
+                                    sender_key,
                                     msg['timestamp']
                                 )
                                 if added:
                                     processed_message_ids.append(msg['message_id'])
-                                break
+                            else:
+                                # 새로운 발신자인 경우 새 채팅방 생성
+                                new_room = self.chat_manager.create_chat_room(sender_key)
+                                if new_room:
+                                    added = self.chat_manager.add_incoming_message(
+                                        sender_key,
+                                        msg['message'],
+                                        msg['message_id'],
+                                        sender_key,
+                                        msg['timestamp']
+                                    )
+                                    if added:
+                                        processed_message_ids.append(msg['message_id'])
                         
                         # 처리된 메시지들을 서버에서 소비(삭제)
                         if processed_message_ids:
