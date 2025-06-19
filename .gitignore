@@ -12,3 +12,17 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Archive/legacy files
+_archive_*
+
+# Build artifacts
+*.bin
+*.zip
+secure_messenger_gui.build/
+secure_messenger_gui.dist/
+secure_messenger_gui.onefile-build/
+
+# Test workspaces
+testA/
+testB/
