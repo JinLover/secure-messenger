@@ -55,6 +55,32 @@ def get_base_path():
 # 기본 경로 설정
 BASE_PATH = get_base_path()
 
+# 환경변수에서 서버 URL 읽기
+def get_server_url():
+    """환경변수 또는 .env 파일에서 서버 URL 읽기"""
+    # 1. 환경변수에서 먼저 확인
+    server_url = os.getenv('SERVER_URL')
+    if server_url:
+        return server_url
+    
+    # 2. .env 파일에서 읽기
+    env_file = BASE_PATH / '.env'
+    if env_file.exists():
+        try:
+            with open(env_file, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    if line.startswith('SERVER_URL=') and not line.startswith('#'):
+                        return line.split('=', 1)[1].strip()
+        except:
+            pass
+    
+    # 3. 기본값: localhost (오픈소스 기본값)
+    return "http://localhost:8000"
+
+# 서버 URL 설정
+DEFAULT_SERVER_URL = get_server_url()
+
 # 라이브러리 임포트 디버깅
 def debug_imports():
     """모든 필요한 라이브러리 임포트 상태 확인"""
@@ -279,8 +305,8 @@ class EmbeddedCrypto:
 class EmbeddedSender:
     """내장형 메시지 전송 클라이언트"""
     
-    def __init__(self, server_url: str = "http://149.28.109.11:8000"):
-        self.server_url = server_url.rstrip('/')
+    def __init__(self, server_url: str = None):
+        self.server_url = (server_url or DEFAULT_SERVER_URL).rstrip('/')
         self.crypto = EmbeddedCrypto()
         self.crypto.load_keys()  # 키 로드
 
@@ -319,8 +345,8 @@ class EmbeddedSender:
 class EmbeddedReceiver:
     """내장형 메시지 수신 클라이언트"""
     
-    def __init__(self, server_url: str = "http://149.28.109.11:8000"):
-        self.server_url = server_url.rstrip('/')
+    def __init__(self, server_url: str = None):
+        self.server_url = (server_url or DEFAULT_SERVER_URL).rstrip('/')
         self.crypto = EmbeddedCrypto()
         self.crypto.load_keys()  # 키 로드
 
@@ -584,8 +610,8 @@ ctk.set_default_color_theme("blue")
 class SecureMessengerGUI:
     """Secure Messenger GUI 애플리케이션"""
     
-    def __init__(self, server_url: str = "http://149.28.109.11:8000"):
-        self.server_url = server_url
+    def __init__(self, server_url: str = None):
+        self.server_url = server_url or DEFAULT_SERVER_URL
         self.crypto = EmbeddedCrypto()
         self.sender = EmbeddedSender(server_url)
         self.receiver = EmbeddedReceiver(server_url)
