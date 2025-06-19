@@ -5,7 +5,9 @@ Message receiver client for secure messenger
 import asyncio
 import argparse
 import time
-import httpx
+import json
+import urllib.request
+import urllib.parse
 from typing import List, Dict, Optional
 
 from .crypto_utils import ClientCrypto
@@ -94,16 +96,17 @@ class MessageReceiver:
             # Choose endpoint based on consume flag
             endpoint = "consume" if consume else "poll"
             
-            # Poll server for messages
-            async with httpx.AsyncClient() as client:
-                response = await client.post(
-                    f"{self.server_url}/api/v1/{endpoint}",
-                    json=payload,
-                    timeout=30.0
-                )
-                
-                if response.status_code == 200:
-                    data = response.json()
+            # Poll server for messages using urllib
+            data = json.dumps(payload).encode('utf-8')
+            req = urllib.request.Request(
+                f"{self.server_url}/api/v1/{endpoint}",
+                data=data,
+                headers={'Content-Type': 'application/json'}
+            )
+            
+            with urllib.request.urlopen(req, timeout=30) as response:
+                if response.status == 200:
+                    data = json.loads(response.read().decode('utf-8'))
                     encrypted_messages = data.get("messages", [])
                     
                     # Decrypt messages
@@ -127,8 +130,8 @@ class MessageReceiver:
                     
                     return decrypted_messages
                 else:
-                    print(f"❌ Failed to poll messages: {response.status_code}")
-                    print(f"Response: {response.text}")
+                    print(f"❌ Failed to poll messages: {response.status}")
+                    print(f"Response: {response.read().decode('utf-8')}")
                     return []
                     
         except Exception as e:

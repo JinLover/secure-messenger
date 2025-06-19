@@ -59,10 +59,11 @@ class SecureChatApp:
     async def check_server_connection(self) -> bool:
         """서버 연결 상태 확인"""
         try:
-            import httpx
-            async with httpx.AsyncClient() as client:
-                response = await client.get(f"{self.server_url}/", timeout=5.0)
-                return response.status_code == 200
+            import urllib.request
+            
+            req = urllib.request.Request(f"{self.server_url}/")
+            with urllib.request.urlopen(req, timeout=5) as response:
+                return response.status == 200
         except:
             return False
     

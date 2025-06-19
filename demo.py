@@ -114,22 +114,24 @@ async def demo_server_status():
     print("\n🖥️  Server Status Check")
     print("=" * 30)
     
-    import httpx
+    import urllib.request
+    import json
     
     try:
-        async with httpx.AsyncClient() as client:
-            # Check server root
-            response = await client.get("http://localhost:8000/")
-            if response.status_code == 200:
+        # Check server root
+        req = urllib.request.Request("http://localhost:8000/")
+        with urllib.request.urlopen(req) as response:
+            if response.status == 200:
                 print("✅ Server is running")
-                data = response.json()
+                data = json.loads(response.read().decode('utf-8'))
                 print(f"📡 Server: {data['name']} v{data['version']}")
                 print(f"📋 Features: {', '.join(data['features'])}")
-            
-            # Check server status
-            response = await client.get("http://localhost:8000/api/v1/status")
-            if response.status_code == 200:
-                status = response.json()
+        
+        # Check server status
+        req = urllib.request.Request("http://localhost:8000/api/v1/status")
+        with urllib.request.urlopen(req) as response:
+            if response.status == 200:
+                status = json.loads(response.read().decode('utf-8'))
                 print(f"📊 Status: {status['status']}")
                 print(f"📨 Total messages: {status['total_messages']}")
                 print(f"🏷️  Active tokens: {status['active_tokens']}")

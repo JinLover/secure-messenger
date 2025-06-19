@@ -4,7 +4,9 @@ Message sender client for secure messenger
 
 import asyncio
 import argparse
-import httpx
+import json
+import urllib.request
+import urllib.parse
 from typing import Optional
 
 from .crypto_utils import ClientCrypto
@@ -57,19 +59,21 @@ class MessageSender:
                 "ttl": ttl
             }
             
-            # Send to server
-            async with httpx.AsyncClient() as client:
-                response = await client.post(
-                    f"{self.server_url}/api/v1/send",
-                    json=payload,
-                    timeout=30.0
-                )
-                
-                if response.status_code == 200:
-                    return response.json()
+            # Send to server using urllib
+            data = json.dumps(payload).encode('utf-8')
+            req = urllib.request.Request(
+                f"{self.server_url}/api/v1/send",
+                data=data,
+                headers={'Content-Type': 'application/json'}
+            )
+            
+            with urllib.request.urlopen(req, timeout=30) as response:
+                if response.status == 200:
+                    result = json.loads(response.read().decode('utf-8'))
+                    return result
                 else:
-                    print(f"❌ Failed to send message: {response.status_code}")
-                    print(f"Response: {response.text}")
+                    print(f"❌ Failed to send message: {response.status}")
+                    print(f"Response: {response.read().decode('utf-8')}")
                     return None
                     
         except Exception as e:
