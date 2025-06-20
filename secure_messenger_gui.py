@@ -14,6 +14,10 @@ from typing import Optional, List
 import customtkinter as ctk
 from tkinter import messagebox
 import json
+import base64
+import tempfile
+from PIL import Image, ImageTk
+import tkinter as tk
 
 # 빌드된 실행 파일의 경로 처리를 위한 함수
 def get_base_path():
@@ -164,6 +168,10 @@ import hashlib
 import urllib.request
 import urllib.error
 import json
+import base64
+from tkinter import filedialog
+from PIL import Image, ImageTk
+import tkinter as tk
 
 class EmbeddedCrypto:
     """내장형 암호화 클래스"""
@@ -246,7 +254,7 @@ class EmbeddedCrypto:
             return False
 
     def encrypt_for_recipient(self, recipient_public_key: str, message: str):
-        """수신자용 메시지 암호화"""
+        """수신자용 메시지 암호화 (텍스트 및 이미지 지원)"""
         try:
             # 임시 키 쌍 생성 (Forward Secrecy를 위해)
             ephemeral_private = nacl.public.PrivateKey.generate()
@@ -259,7 +267,7 @@ class EmbeddedCrypto:
             recipient_key = nacl.public.PublicKey(recipient_public_key, encoder=nacl.encoding.HexEncoder)
             box = nacl.public.Box(ephemeral_private, recipient_key)
             
-            # 메시지 암호화
+            # 메시지 암호화 (텍스트든 바이너리든 UTF-8로 인코딩)
             encrypted = box.encrypt(message_with_sender.encode('utf-8'))
             
             # 라우팅 토큰 생성
@@ -273,6 +281,32 @@ class EmbeddedCrypto:
             }
         except Exception as e:
             raise Exception(f"암호화 실패: {e}")
+    
+    def encrypt_image_for_recipient(self, recipient_public_key: str, image_path: str):
+        """이미지 파일 암호화 및 전송 준비"""
+        try:
+            # 이미지 파일 읽기
+            with open(image_path, 'rb') as f:
+                image_data = f.read()
+            
+            # 파일 크기 체크 (5MB 제한)
+            if len(image_data) > 5 * 1024 * 1024:
+                raise Exception("이미지 파일이 너무 큽니다 (5MB 제한)")
+            
+            # 이미지를 base64로 인코딩
+            image_b64 = base64.b64encode(image_data).decode('utf-8')
+            
+            # 파일명 추출
+            filename = Path(image_path).name
+            
+            # 이미지 메시지 형식: IMAGE:{filename}:{base64_data}
+            image_message = f"IMAGE:{filename}:{image_b64}"
+            
+            # 일반 메시지와 동일한 암호화 방식 사용
+            return self.encrypt_for_recipient(recipient_public_key, image_message)
+            
+        except Exception as e:
+            raise Exception(f"이미지 암호화 실패: {e}")
 
     def decrypt_message_for_me(self, sender_public_key: str, nonce: str, ciphertext: str):
         """본인용 메시지 복호화"""
@@ -333,6 +367,38 @@ class EmbeddedSender:
             
             try:
                 with urllib.request.urlopen(req, timeout=30) as response:
+                    if response.getcode() == 200:
+                        return json.loads(response.read().decode('utf-8'))
+            except Exception:
+                pass
+                
+            return None
+        except Exception:
+            return None
+    
+    async def send_image(self, recipient_public_key: str, image_path: str, ttl: int = 3600):
+        """이미지 전송"""
+        try:
+            encrypted_data = self.crypto.encrypt_image_for_recipient(recipient_public_key, image_path)
+            
+            payload = {
+                "token": encrypted_data["token"],
+                "ciphertext": encrypted_data["ciphertext"],
+                "nonce": encrypted_data["nonce"],
+                "sender_public_key": encrypted_data["sender_public_key"],
+                "ttl": ttl
+            }
+            
+            # urllib만 사용
+            data = json.dumps(payload).encode('utf-8')
+            req = urllib.request.Request(
+                f"{self.server_url}/api/v1/send",
+                data=data,
+                headers={'Content-Type': 'application/json'}
+            )
+            
+            try:
+                with urllib.request.urlopen(req, timeout=60) as response:  # 이미지는 더 긴 타임아웃
                     if response.getcode() == 200:
                         return json.loads(response.read().decode('utf-8'))
             except Exception:
@@ -608,22 +674,68 @@ ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
 
 class SecureMessengerGUI:
-    """Secure Messenger GUI 애플리케이션"""
+    """Secure Messenger GUI Application"""
     
     def __init__(self, server_url: str = None):
+        # 라이브러리 버전 정보 출력
+        self.print_library_versions()
+        
         self.server_url = server_url or DEFAULT_SERVER_URL
+        
+        # 암호화 및 통신 컴포넌트 초기화
         self.crypto = EmbeddedCrypto()
-        self.sender = EmbeddedSender(server_url)
-        self.receiver = EmbeddedReceiver(server_url)
-        self.receiver.crypto = self.crypto
+        self.sender = EmbeddedSender(self.server_url)
+        self.receiver = EmbeddedReceiver(self.server_url)
         self.chat_manager = EmbeddedChatManager()
         
-        self.running = False
-        self.receive_thread: Optional[threading.Thread] = None
+        # GUI 상태 변수들
         self.current_room = None
+        self.server_online = False
+        self.running = False
+        self.receive_thread = None
         
+        # GUI 설정
+        ctk.set_appearance_mode("dark")
+        ctk.set_default_color_theme("blue")
         self.setup_gui()
         
+        # 백그라운드 작업 시작
+        self.start_background_receiver()
+        self.update_server_status()
+    
+    def print_library_versions(self):
+        """라이브러리 버전 정보 출력"""
+        try:
+            print(f"DEBUG: === 라이브러리 버전 정보 ===")
+            
+            # CustomTkinter 버전
+            try:
+                print(f"DEBUG: CustomTkinter 버전: {ctk.__version__}")
+            except:
+                print(f"DEBUG: CustomTkinter 버전: 불명")
+            
+            # Pillow 버전
+            try:
+                from PIL import __version__ as pil_version
+                print(f"DEBUG: Pillow 버전: {pil_version}")
+            except:
+                print(f"DEBUG: Pillow 버전: 불명")
+            
+            # Tkinter 버전
+            try:
+                import tkinter
+                print(f"DEBUG: Tkinter 버전: {tkinter.TkVersion}")
+            except:
+                print(f"DEBUG: Tkinter 버전: 불명")
+            
+            # Python 버전
+            print(f"DEBUG: Python 버전: {sys.version}")
+            print(f"DEBUG: 플랫폼: {sys.platform}")
+            
+            print(f"DEBUG: === 버전 정보 끝 ===")
+        except Exception as e:
+            print(f"DEBUG: 버전 정보 출력 실패: {e}")
+
     def setup_gui(self):
         """GUI 초기화"""
         self.root = ctk.CTk()
@@ -1254,13 +1366,24 @@ class SecureMessengerGUI:
         input_frame = ctk.CTkFrame(self.chat_panel)
         input_frame.pack(fill="x", padx=10, pady=(5, 10))
         
+        # 이미지 첨부 버튼
+        attach_button = ctk.CTkButton(
+            input_frame,
+            text="📎",
+            command=self.attach_image,
+            font=ctk.CTkFont(size=14),
+            width=40,
+            height=40
+        )
+        attach_button.pack(side="left", padx=(10, 5), pady=10)
+        
         self.message_entry = ctk.CTkEntry(
             input_frame,
             placeholder_text="메시지를 입력하세요...",
             font=ctk.CTkFont(size=12),
             height=40
         )
-        self.message_entry.pack(side="left", fill="x", expand=True, padx=(10, 5), pady=10)
+        self.message_entry.pack(side="left", fill="x", expand=True, padx=5, pady=10)
         
         send_button = ctk.CTkButton(
             input_frame,
@@ -1299,22 +1422,28 @@ class SecureMessengerGUI:
                 self.create_message_widget(msg)
                 
     def create_message_widget(self, message):
-        """메시지 위젯 생성"""
+        """메시지 위젯 생성 (텍스트 및 이미지 지원)"""
         msg_frame = ctk.CTkFrame(self.message_frame)
+        
+        # 이미지 메시지인지 확인
+        is_image = message["content"].startswith("IMAGE:")
         
         if message["is_outgoing"]:
             msg_frame.pack(fill="x", padx=(50, 10), pady=5, anchor="e")
             msg_frame.configure(fg_color=["#1f538d", "#14375e"])
             
-            content_label = ctk.CTkLabel(
-                msg_frame,
-                text=message["content"],
-                font=ctk.CTkFont(size=12),
-                wraplength=400,
-                anchor="w",
-                justify="left"
-            )
-            content_label.pack(padx=10, pady=(10, 5), anchor="e")
+            if is_image:
+                self.create_image_content(msg_frame, message["content"], "e")
+            else:
+                content_label = ctk.CTkLabel(
+                    msg_frame,
+                    text=message["content"],
+                    font=ctk.CTkFont(size=12),
+                    wraplength=400,
+                    anchor="w",
+                    justify="left"
+                )
+                content_label.pack(padx=10, pady=(10, 5), anchor="e")
             
             time_label = ctk.CTkLabel(
                 msg_frame,
@@ -1328,15 +1457,18 @@ class SecureMessengerGUI:
             msg_frame.pack(fill="x", padx=(10, 50), pady=5, anchor="w")
             msg_frame.configure(fg_color=["#3a3a3a", "#2b2b2b"])
             
-            content_label = ctk.CTkLabel(
-                msg_frame,
-                text=message["content"],
-                font=ctk.CTkFont(size=12),
-                wraplength=400,
-                anchor="w",
-                justify="left"
-            )
-            content_label.pack(padx=10, pady=(10, 5), anchor="w")
+            if is_image:
+                self.create_image_content(msg_frame, message["content"], "w")
+            else:
+                content_label = ctk.CTkLabel(
+                    msg_frame,
+                    text=message["content"],
+                    font=ctk.CTkFont(size=12),
+                    wraplength=400,
+                    anchor="w",
+                    justify="left"
+                )
+                content_label.pack(padx=10, pady=(10, 5), anchor="w")
             
             time_label = ctk.CTkLabel(
                 msg_frame,
@@ -1346,7 +1478,296 @@ class SecureMessengerGUI:
                 anchor="w"
             )
             time_label.pack(padx=10, pady=(0, 10), anchor="w")
+    
+    def create_image_content(self, parent_frame, content, anchor):
+        """이미지 콘텐츠 생성"""
+        try:
+            # 콘텐츠에서 이미지 정보 파싱
+            parts = content.split(":", 2)
+            if len(parts) != 3:
+                raise ValueError("잘못된 이미지 형식")
             
+            _, filename, image_data = parts
+            
+            # Base64 데이터인지 파일 경로인지 확인
+            if image_data.startswith("/") or image_data.startswith("C:") or image_data.startswith("D:"):
+                # 파일 경로로 처리
+                self.display_image_from_file(parent_frame, image_data, filename, anchor)
+            else:
+                # Base64 데이터로 처리
+                self.display_image_from_base64(parent_frame, image_data, filename, anchor)
+            
+        except Exception as e:
+            # 이미지 처리 실패 시 텍스트로 표시
+            fallback_label = ctk.CTkLabel(
+                parent_frame,
+                text=f"🖼️ 이미지 (처리 실패): {str(e)[:50]}",
+                font=ctk.CTkFont(size=12),
+                anchor=anchor
+            )
+            fallback_label.pack(padx=10, pady=(10, 5), anchor=anchor)
+    
+    def display_image_from_file(self, parent_frame, file_path, filename, anchor):
+        """파일에서 이미지 직접 표시"""
+        try:
+            if not os.path.exists(file_path):
+                # 파일이 없으면 텍스트로 표시
+                fallback_label = ctk.CTkLabel(
+                    parent_frame,
+                    text=f"🖼️ {filename} (파일 없음)",
+                    font=ctk.CTkFont(size=12),
+                    anchor=anchor
+                )
+                fallback_label.pack(padx=10, pady=(10, 5), anchor=anchor)
+                return
+            
+            # PIL로 이미지 로드 및 리사이즈
+            pil_image = Image.open(file_path)
+            original_size = pil_image.size
+            
+            # 적절한 크기로 리사이즈 (최대 300x300)
+            max_size = 300
+            if original_size[0] > max_size or original_size[1] > max_size:
+                # Python 3.11 호환성을 위해 LANCZOS 사용
+                try:
+                    pil_image.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
+                except AttributeError:
+                    pil_image.thumbnail((max_size, max_size), Image.LANCZOS)
+            
+            # 이미지 직접 표시
+            self._create_direct_image(parent_frame, pil_image, filename, original_size, file_path, anchor)
+            
+        except Exception as e:
+            # 이미지 로드 실패 시 텍스트로 표시
+            fallback_label = ctk.CTkLabel(
+                parent_frame,
+                text=f"🖼️ {filename} (로드 실패: {str(e)[:30]})",
+                font=ctk.CTkFont(size=12),
+                anchor=anchor
+            )
+            fallback_label.pack(padx=10, pady=(10, 5), anchor=anchor)
+    
+    def display_image_from_base64(self, parent_frame, base64_data, filename, anchor):
+        """base64 데이터에서 이미지 직접 표시"""
+        try:
+            # base64 디코딩
+            image_bytes = base64.b64decode(base64_data)
+            
+            # PIL로 이미지 로드 및 리사이즈
+            from io import BytesIO
+            pil_image = Image.open(BytesIO(image_bytes))
+            original_size = pil_image.size
+            
+            # 적절한 크기로 리사이즈 (최대 300x300)
+            max_size = 300
+            if original_size[0] > max_size or original_size[1] > max_size:
+                # Python 3.11 호환성을 위해 LANCZOS 사용
+                try:
+                    pil_image.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
+                except AttributeError:
+                    pil_image.thumbnail((max_size, max_size), Image.LANCZOS)
+            
+            # 임시 파일로 저장 (클릭 시 열기용)
+            temp_path = os.path.join(tempfile.gettempdir(), f"temp_{filename}")
+            # 원본 크기로 저장
+            original_image = Image.open(BytesIO(image_bytes))
+            original_image.save(temp_path, "PNG")
+            
+            # 이미지 직접 표시
+            self._create_direct_image(parent_frame, pil_image, filename, original_size, temp_path, anchor)
+            
+        except Exception as e:
+            # 이미지 처리 실패 시 텍스트로 표시
+            fallback_label = ctk.CTkLabel(
+                parent_frame,
+                text=f"🖼️ {filename} (디코딩 실패: {str(e)[:30]})",
+                font=ctk.CTkFont(size=12),
+                anchor=anchor
+            )
+            fallback_label.pack(padx=10, pady=(10, 5), anchor=anchor)
+
+    def _create_direct_image(self, parent_frame, pil_image, filename, original_size, image_path, anchor):
+        """이미지를 직접 표시 (PIL 이미지 사용)"""
+        try:
+            print(f"DEBUG: _create_direct_image 시작 - {filename}")
+            print(f"DEBUG: PIL 이미지 모드: {pil_image.mode}")
+            print(f"DEBUG: PIL 이미지 크기: {pil_image.size}")
+            print(f"DEBUG: 원본 크기: {original_size}")
+            
+            # 이미지 컨테이너 프레임
+            image_frame = ctk.CTkFrame(parent_frame)
+            image_frame.pack(padx=10, pady=(10, 5), anchor=anchor)
+            print(f"DEBUG: 이미지 프레임 생성 완료")
+            
+            # PIL 이미지를 PhotoImage로 변환 (RGB 모드로 변환하여 호환성 확보)
+            print(f"DEBUG: PIL 이미지 모드 변환 시작")
+            if pil_image.mode != 'RGB':
+                print(f"DEBUG: {pil_image.mode} -> RGB 변환")
+                pil_image = pil_image.convert('RGB')
+            
+            # PIL ImageTk 문제 우회: 임시 파일로 저장 후 tkinter PhotoImage 사용
+            print(f"DEBUG: 임시 파일 방식으로 이미지 처리 시작")
+            
+            # 임시 파일 경로 생성
+            temp_dir = tempfile.gettempdir()
+            temp_filename = f"temp_display_{filename}_{int(time.time())}.png"
+            temp_display_path = os.path.join(temp_dir, temp_filename)
+            
+            # PIL 이미지를 임시 파일로 저장
+            if pil_image.mode in ('RGBA', 'LA'):
+                # 투명도가 있는 이미지는 RGB로 변환 (흰 배경 합성)
+                background = Image.new('RGB', pil_image.size, (255, 255, 255))
+                background.paste(pil_image, mask=pil_image.split()[-1] if pil_image.mode == 'RGBA' else None)
+                background.save(temp_display_path, 'PNG')
+            else:
+                pil_image.save(temp_display_path, 'PNG')
+            
+            print(f"DEBUG: 임시 파일 저장 완료: {temp_display_path}")
+            
+            # tkinter PhotoImage로 로드 (PIL ImageTk 대신)
+            try:
+                photo = tk.PhotoImage(file=temp_display_path)
+                print(f"DEBUG: tkinter PhotoImage 로드 완료")
+            except Exception as photo_error:
+                print(f"DEBUG: tkinter PhotoImage 로드 실패: {photo_error}")
+                raise photo_error
+            
+            # Canvas로 이미지 표시
+            print(f"DEBUG: Canvas 생성 시작")
+            # PhotoImage 크기 사용
+            canvas_width = photo.width()
+            canvas_height = photo.height()
+            print(f"DEBUG: Canvas 크기 - width: {canvas_width}, height: {canvas_height}")
+            
+            canvas = tk.Canvas(
+                image_frame,
+                width=canvas_width,
+                height=canvas_height,
+                bg="#2b2b2b",  # 고정된 다크 배경색
+                highlightthickness=0,
+                borderwidth=0,
+                relief="flat",
+                cursor="hand2"
+            )
+            print(f"DEBUG: Canvas 생성 완료")
+            canvas.pack(padx=5, pady=5)
+            print(f"DEBUG: Canvas pack 완료")
+            
+            # Canvas에 이미지 표시
+            print(f"DEBUG: Canvas에 이미지 표시 시작")
+            canvas.create_image(
+                canvas_width // 2,
+                canvas_height // 2,
+                image=photo,
+                anchor="center"
+            )
+            print(f"DEBUG: Canvas 이미지 표시 완료")
+            canvas.photo = photo  # 가비지 컬렉션 방지
+            
+            # 이미지 정보 라벨
+            info_label = ctk.CTkLabel(
+                image_frame,
+                text=f"{filename} ({original_size[0]}×{original_size[1]})",
+                font=ctk.CTkFont(size=10),
+                text_color="gray"
+            )
+            info_label.pack(padx=5, pady=(0, 5))
+            
+            # 클릭 시 원본 이미지 열기
+            def open_full_image(event=None):
+                try:
+                    # 기본 이미지 뷰어로 열기
+                    if sys.platform == "darwin":  # macOS
+                        os.system(f'open "{image_path}"')
+                    elif sys.platform == "win32":  # Windows
+                        os.startfile(image_path)
+                    else:  # Linux
+                        os.system(f'xdg-open "{image_path}"')
+                except Exception as e:
+                    print(f"이미지 열기 실패: {e}")
+            
+            # 클릭 이벤트 바인딩 (Canvas와 프레임에)
+            print(f"DEBUG: 클릭 이벤트 바인딩 시작")
+            canvas.bind("<Button-1>", open_full_image)
+            image_frame.bind("<Button-1>", open_full_image)
+            
+            # 호버 효과 추가
+            def on_enter(event):
+                canvas.configure(cursor="hand2")
+                
+            def on_leave(event):
+                canvas.configure(cursor="")
+                
+            canvas.bind("<Enter>", on_enter)
+            canvas.bind("<Leave>", on_leave)
+            print(f"DEBUG: 클릭 이벤트 바인딩 완료")
+            
+            # 임시 파일 정리 (5초 후)
+            def cleanup_temp_file():
+                try:
+                    if os.path.exists(temp_display_path):
+                        os.remove(temp_display_path)
+                        print(f"DEBUG: 임시 파일 정리 완료: {temp_display_path}")
+                except:
+                    pass
+            
+            # 5초 후 임시 파일 정리
+            threading.Timer(5.0, cleanup_temp_file).start()
+            print(f"DEBUG: 이미지 표시 완료")
+            
+        except Exception as e:
+            # 직접 표시 실패 시 텍스트로 대체
+            import traceback
+            print(f"DEBUG: 이미지 직접 표시 실패 - 상세 오류:")
+            print(f"DEBUG: Exception type: {type(e).__name__}")
+            print(f"DEBUG: Exception message: {str(e)}")
+            print(f"DEBUG: Traceback:")
+            traceback.print_exc()
+            
+            fallback_label = ctk.CTkLabel(
+                parent_frame,
+                text=f"🖼️ {filename} ({original_size[0]}×{original_size[1]})",
+                font=ctk.CTkFont(size=12),
+                anchor=anchor
+            )
+            fallback_label.pack(padx=10, pady=(10, 5), anchor=anchor)
+            print(f"이미지 직접 표시 실패: {e}")
+
+    def attach_image(self):
+        """이미지 첨부"""
+        if not self.current_room:
+            return
+            
+        # 이미지 파일 선택
+        file_path = filedialog.askopenfilename(
+            title="이미지 파일 선택",
+            filetypes=[
+                ("이미지 파일", "*.png *.jpg *.jpeg *.gif *.bmp *.webp"),
+                ("PNG", "*.png"),
+                ("JPEG", "*.jpg *.jpeg"),
+                ("GIF", "*.gif"),
+                ("모든 파일", "*.*")
+            ]
+        )
+        
+        if file_path:
+            # 파일 크기 체크
+            try:
+                file_size = os.path.getsize(file_path)
+                if file_size > 5 * 1024 * 1024:  # 5MB 제한
+                    messagebox.showerror("오류", "이미지 파일이 너무 큽니다 (5MB 제한)")
+                    return
+                    
+                # 이미지 전송
+                threading.Thread(
+                    target=self._send_image_async,
+                    args=(file_path,),
+                    daemon=True
+                ).start()
+                
+            except Exception as e:
+                messagebox.showerror("오류", f"이미지 파일 처리 오류: {e}")
+    
     def send_message(self):
         """메시지 전송"""
         if not self.current_room:
@@ -1394,6 +1815,39 @@ class SecureMessengerGUI:
                 
         except Exception as e:
             self.root.after(0, lambda: messagebox.showerror("오류", f"메시지 전송 오류: {e}"))
+    
+    def _send_image_async(self, image_path: str):
+        """비동기 이미지 전송"""
+        try:
+            filename = Path(image_path).name
+            
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
+            result = loop.run_until_complete(
+                self.sender.send_image(
+                    self.current_room["peer_public_key"],
+                    image_path,
+                    ttl=3600
+                )
+            )
+            
+            loop.close()
+            
+            if result:
+                self.chat_manager.add_outgoing_message(
+                    self.current_room["room_id"],
+                    f"IMAGE:{filename}:{image_path}",  # 실제 저장용
+                    result['message_id']
+                )
+                
+                self.root.after(0, self.refresh_messages)
+                self.root.after(0, self.refresh_chat_list)
+            else:
+                self.root.after(0, lambda: messagebox.showerror("오류", "이미지 전송 실패!"))
+                
+        except Exception as e:
+            self.root.after(0, lambda: messagebox.showerror("오류", f"이미지 전송 오류: {e}"))
             
     def start_background_receiver(self):
         """백그라운드 메시지 수신 시작"""
