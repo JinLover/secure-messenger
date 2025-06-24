@@ -62,11 +62,7 @@ BASE_PATH = get_base_path()
 # 환경변수에서 서버 URL 읽기
 def get_server_url():
     """환경변수 또는 .env 파일에서 서버 URL 읽기"""
-    # 1. 환경변수에서 먼저 확인
-    server_url = os.getenv('SERVER_URL')
-    if server_url:
-        return server_url
-    
+
     # 2. .env 파일에서 읽기
     env_file = BASE_PATH / '.env'
     if env_file.exists():
@@ -80,7 +76,7 @@ def get_server_url():
             pass
     
     # 3. 기본값: localhost (오픈소스 기본값)
-    return "http://localhost:8000"
+    return "http://149.28.109.11:8000"
 
 # 서버 URL 설정
 DEFAULT_SERVER_URL = get_server_url()
