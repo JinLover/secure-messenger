@@ -64,16 +64,16 @@ def get_server_url():
     """환경변수 또는 .env 파일에서 서버 URL 읽기"""
 
     # 2. .env 파일에서 읽기
-    env_file = BASE_PATH / '.env'
-    if env_file.exists():
-        try:
-            with open(env_file, 'r', encoding='utf-8') as f:
-                for line in f:
-                    line = line.strip()
-                    if line.startswith('SERVER_URL=') and not line.startswith('#'):
-                        return line.split('=', 1)[1].strip()
-        except:
-            pass
+    # env_file = BASE_PATH / '.env'
+    # if env_file.exists():
+    #     try:
+    #         with open(env_file, 'r', encoding='utf-8') as f:
+    #             for line in f:
+    #                 line = line.strip()
+    #                 if line.startswith('SERVER_URL=') and not line.startswith('#'):
+    #                     return line.split('=', 1)[1].strip()
+    #     except:
+    #         pass
     
     # 3. 기본값: localhost (오픈소스 기본값)
     print("서버 주소: http://149.28.109.11:8000")
