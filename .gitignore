@@ -15,9 +15,11 @@ wheels/
 
 # Environment variables
 .env
+uv.lock
 
-# Archive/legacy files
-_archive_*
+# mobile
+mobile_app/
+
 
 # Build artifacts
 *.bin
