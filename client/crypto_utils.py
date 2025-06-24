@@ -104,11 +104,18 @@ class ClientCrypto:
         }
         
         try:
+            # 디렉토리가 존재하지 않으면 생성
+            self.keys_dir.mkdir(exist_ok=True)
+            
             with open(keys_file, 'w') as f:
                 json.dump(keys_data, f, indent=2)
             
-            # Set restrictive permissions
-            os.chmod(keys_file, 0o600)
+            # 크로스 플랫폼 파일 권한 설정 (Unix 계열에서만)
+            try:
+                if hasattr(os, 'chmod'):
+                    os.chmod(keys_file, 0o600)
+            except Exception:
+                pass  # Windows에서는 무시
             
             return True
         except Exception:

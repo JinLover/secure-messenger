@@ -100,11 +100,14 @@ uv run python -m client.receiver --listen  # 메시지 수신
 ### 🔨 스탠드얼론 빌드
 
 ```bash
-# 자동 빌드 (추천)
+# 기본 빌드 (.env 파일 설정 사용)
 ./build.sh
 
-# 클린 빌드
+# 클린 빌드 (기존 파일 정리 후 빌드)
 ./build.sh --clean
+
+# 프로덕션 플래그 (현재는 동일하게 .env 사용)
+./build.sh --production
 ```
 
 **빌드 결과:**
@@ -113,6 +116,11 @@ uv run python -m client.receiver --listen  # 메시지 수신
 - **플랫폼**: macOS 11.0+ (arm64)
 - **의존성**: 없음 (완전 스탠드얼론)
 - **포함 기능**: 모든 최신 GUI 기능 및 보안 개선사항
+
+**서버 설정:**
+- **자동 감지**: `.env` 파일에서 `SERVER_URL` 자동 로드
+- **기본값**: `.env` 파일이 없으면 `localhost:8000` 사용
+- **유연한 설정**: 빌드 시점에 `.env` 파일만 수정하면 됨
 
 ## 🎯 데모 실행
 
@@ -324,3 +332,29 @@ MIT License
 ---
 
 **"Telegram, Signal보다 더 투명하고 제어 가능한 설계"**를 목표로 합니다. 🚀
+
+## 🌐 크로스 플랫폼 지원 (Cross-Platform Support)
+
+이 프로젝트는 **Windows**, **macOS**, **Linux**에서 동일하게 작동하도록 설계되었습니다.
+
+### 📁 파일 경로 처리
+- **pathlib** 라이브러리를 사용하여 크로스 플랫폼 경로 처리
+- 하드코딩된 경로 구분자(`/`, `\`) 제거
+- 절대 경로 감지를 `Path.is_absolute()` 메서드로 처리
+
+### 🔧 플랫폼별 차이점 처리
+- **파일 권한**: Unix 계열(macOS, Linux)에서만 `chmod` 적용
+- **실행 파일 확장자**: `.bin`(Unix), `.exe`(Windows) 모두 지원
+- **Nuitka 빌드 감지**: 경로 구분자를 정규화하여 감지
+
+### 🚀 빌드 및 실행
+- **Windows**: `secure_messenger_gui.exe` 또는 `.bat` 스크립트
+- **macOS/Linux**: `secure_messenger_gui.bin` 또는 `.sh` 스크립트
+- **Python 스크립트**: 모든 플랫폼에서 `python secure_messenger_gui.py`
+
+### 📂 데이터 디렉토리
+- `keys/`: 암호화 키 저장
+- `chat_data/`: 채팅 데이터 저장
+- `.env`: 환경 설정 (선택사항)
+
+프로젝트는 실행 파일과 같은 디렉토리에서 위 폴더들을 자동으로 찾아 사용합니다.

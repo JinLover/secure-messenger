@@ -18,15 +18,16 @@ import base64
 import tempfile
 from PIL import Image, ImageTk
 import tkinter as tk
+import io
 
 # 빌드된 실행 파일의 경로 처리를 위한 함수
 def get_base_path():
-    """실행 파일의 기본 경로 반환"""
-    # Nuitka 빌드 감지: sys.executable이 임시 디렉토리에 있는지 확인
+    """실행 파일의 기본 경로 반환 - 크로스 플랫폼 지원"""
+    # Nuitka 빌드 감지: 크로스 플랫폼 대응
     is_nuitka_build = (
-        '/onefile_' in str(sys.executable) or  # Nuitka onefile 특징
-        getattr(sys, 'frozen', False) or       # 일반적인 frozen 속성
-        str(sys.executable).endswith('.bin')   # 실행 파일 확장자
+        'onefile_' in str(sys.executable).replace('\\', '/') or  # 크로스 플랫폼 onefile 감지
+        getattr(sys, 'frozen', False) or                         # 일반적인 frozen 속성
+        str(sys.executable).endswith(('.bin', '.exe'))           # 실행 파일 확장자 (Unix/Windows)
     )
     
     if is_nuitka_build:
@@ -49,7 +50,7 @@ def get_base_path():
                 
             # 기본값: sys.argv[0]의 부모 디렉토리
             return argv_path
-        except:
+        except Exception:
             # 실패 시 현재 작업 디렉토리 사용
             return Path.cwd()
     else:
@@ -61,23 +62,22 @@ BASE_PATH = get_base_path()
 
 # 환경변수에서 서버 URL 읽기
 def get_server_url():
-    """환경변수 또는 .env 파일에서 서버 URL 읽기"""
+    """환경변수 또는 .env 파일에서 서버 URL 읽기 - 크로스 플랫폼 지원"""
 
-    # 2. .env 파일에서 읽기
-    # env_file = BASE_PATH / '.env'
-    # if env_file.exists():
-    #     try:
-    #         with open(env_file, 'r', encoding='utf-8') as f:
-    #             for line in f:
-    #                 line = line.strip()
-    #                 if line.startswith('SERVER_URL=') and not line.startswith('#'):
-    #                     return line.split('=', 1)[1].strip()
-    #     except:
-    #         pass
+    # 2. .env 파일에서 읽기 - 크로스 플랫폼 경로 처리
+    env_file = BASE_PATH / '.env'
+    if env_file.exists():
+        try:
+            with open(env_file, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    if line.startswith('SERVER_URL=') and not line.startswith('#'):
+                        return line.split('=', 1)[1].strip()
+        except Exception:
+            pass
     
     # 3. 기본값: localhost (오픈소스 기본값)
-    print("서버 주소: http://149.28.109.11:8000")
-    return "http://149.28.109.11:8000"
+    return "localhost:8000"
 
 # 서버 URL 설정
 DEFAULT_SERVER_URL = get_server_url()
@@ -123,18 +123,19 @@ def debug_imports():
 
 # 경로 디버깅 함수
 def debug_paths():
-    """경로 관련 디버깅 정보 출력"""
+    """경로 관련 디버깅 정보 출력 - 크로스 플랫폼 지원"""
     print("DEBUG: 경로 정보")
     print(f"sys.frozen: {getattr(sys, 'frozen', False)}")
     print(f"sys.executable: {sys.executable}")
     print(f"sys.argv[0]: {sys.argv[0]}")
     print(f"Path.cwd(): {Path.cwd()}")
+    print(f"Platform: {sys.platform}")
     
-    # Nuitka 빌드 감지 로직 확인
+    # Nuitka 빌드 감지 로직 확인 - 크로스 플랫폼
     is_nuitka_build = (
-        '/onefile_' in str(sys.executable) or
+        'onefile_' in str(sys.executable).replace('\\', '/') or
         getattr(sys, 'frozen', False) or
-        str(sys.executable).endswith('.bin')
+        str(sys.executable).endswith(('.bin', '.exe'))
     )
     print(f"Nuitka 빌드 감지: {is_nuitka_build}")
     
@@ -144,7 +145,7 @@ def debug_paths():
         print(f"argv_path: {argv_path}")
         print(f"argv_path에 keys 존재: {(argv_path / 'keys').exists()}")
         print(f"argv_path에 chat_data 존재: {(argv_path / 'chat_data').exists()}")
-    except:
+    except Exception:
         print("argv_path 오류")
     
     print(f"BASE_PATH: {BASE_PATH}")
@@ -228,12 +229,21 @@ class EmbeddedCrypto:
         }
         
         try:
+            # 디렉토리가 존재하지 않으면 생성
+            self.keys_dir.mkdir(exist_ok=True)
+            
             with open(keys_file, 'w') as f:
                 json.dump(keys_data, f, indent=2)
             
-            os.chmod(keys_file, 0o600)
+            # 크로스 플랫폼 파일 권한 설정 (Unix 계열에서만)
+            try:
+                if hasattr(os, 'chmod'):
+                    os.chmod(keys_file, 0o600)
+            except Exception:
+                pass  # Windows에서는 무시
+                
             return True
-        except:
+        except Exception:
             return False
 
     def export_public_key(self, filename: str = "public_key.txt"):
@@ -1479,30 +1489,32 @@ class SecureMessengerGUI:
     def create_image_content(self, parent_frame, content, anchor):
         """이미지 콘텐츠 생성"""
         try:
-            # 콘텐츠에서 이미지 정보 파싱
-            parts = content.split(":", 2)
-            if len(parts) != 3:
-                raise ValueError("잘못된 이미지 형식")
+            # 이미지 데이터가 파일 경로인지 base64인지 판단
+            image_data = content.get("image_data", "")
+            filename = content.get("filename", "image.png")
             
-            _, filename, image_data = parts
+            # 크로스 플랫폼 절대 경로 감지
+            is_absolute_path = Path(image_data).is_absolute() if image_data else False
             
-            # Base64 데이터인지 파일 경로인지 확인
-            if image_data.startswith("/") or image_data.startswith("C:") or image_data.startswith("D:"):
-                # 파일 경로로 처리
+            if is_absolute_path:
+                # 절대 경로인 경우 파일로 처리
                 self.display_image_from_file(parent_frame, image_data, filename, anchor)
             else:
-                # Base64 데이터로 처리
+                # base64 데이터로 처리
                 self.display_image_from_base64(parent_frame, image_data, filename, anchor)
-            
+                
         except Exception as e:
-            # 이미지 처리 실패 시 텍스트로 표시
-            fallback_label = ctk.CTkLabel(
-                parent_frame,
-                text=f"🖼️ 이미지 (처리 실패): {str(e)[:50]}",
-                font=ctk.CTkFont(size=12),
-                anchor=anchor
+            # 이미지 표시 실패 시 텍스트로 대체
+            error_frame = ctk.CTkFrame(parent_frame)
+            error_frame.pack(anchor=anchor, pady=(5, 10), padx=10)
+            
+            error_label = ctk.CTkLabel(
+                error_frame,
+                text=f"🖼️ [이미지 표시 실패: {filename}]",
+                font=ctk.CTkFont(size=12, slant="italic"),
+                text_color="gray"
             )
-            fallback_label.pack(padx=10, pady=(10, 5), anchor=anchor)
+            error_label.pack(padx=10, pady=5)
     
     def display_image_from_file(self, parent_frame, file_path, filename, anchor):
         """파일에서 이미지 직접 표시"""
@@ -1529,7 +1541,12 @@ class SecureMessengerGUI:
                 try:
                     pil_image.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
                 except AttributeError:
-                    pil_image.thumbnail((max_size, max_size), Image.LANCZOS)
+                    # 이전 버전의 PIL에서는 Image.LANCZOS 직접 사용
+                    try:
+                        pil_image.thumbnail((max_size, max_size), Image.LANCZOS)
+                    except AttributeError:
+                        # 가장 호환성이 좋은 방법
+                        pil_image.thumbnail((max_size, max_size))
             
             # 이미지 직접 표시
             self._create_direct_image(parent_frame, pil_image, filename, original_size, file_path, anchor)
@@ -1547,189 +1564,173 @@ class SecureMessengerGUI:
     def display_image_from_base64(self, parent_frame, base64_data, filename, anchor):
         """base64 데이터에서 이미지 직접 표시"""
         try:
-            # base64 디코딩
+            # Base64 디코딩
             image_bytes = base64.b64decode(base64_data)
             
-            # PIL로 이미지 로드 및 리사이즈
-            from io import BytesIO
-            pil_image = Image.open(BytesIO(image_bytes))
+            # PIL Image 생성
+            pil_image = Image.open(io.BytesIO(image_bytes))
             original_size = pil_image.size
             
-            # 적절한 크기로 리사이즈 (최대 300x300)
-            max_size = 300
-            if original_size[0] > max_size or original_size[1] > max_size:
-                # Python 3.11 호환성을 위해 LANCZOS 사용
-                try:
-                    pil_image.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
-                except AttributeError:
-                    pil_image.thumbnail((max_size, max_size), Image.LANCZOS)
+            # 임시 파일로 저장 (크로스 플랫폼)
+            temp_dir = Path(tempfile.gettempdir())
+            temp_path = temp_dir / f"temp_{filename}"
             
-            # 임시 파일로 저장 (클릭 시 열기용)
-            temp_path = os.path.join(tempfile.gettempdir(), f"temp_{filename}")
-            # 원본 크기로 저장
-            original_image = Image.open(BytesIO(image_bytes))
-            original_image.save(temp_path, "PNG")
+            with open(temp_path, 'wb') as f:
+                f.write(image_bytes)
             
-            # 이미지 직접 표시
-            self._create_direct_image(parent_frame, pil_image, filename, original_size, temp_path, anchor)
+            # 이미지 표시
+            self._create_direct_image(parent_frame, pil_image, filename, original_size, str(temp_path), anchor)
             
         except Exception as e:
-            # 이미지 처리 실패 시 텍스트로 표시
-            fallback_label = ctk.CTkLabel(
-                parent_frame,
-                text=f"🖼️ {filename} (디코딩 실패: {str(e)[:30]})",
-                font=ctk.CTkFont(size=12),
-                anchor=anchor
+            # Base64 이미지 처리 실패
+            error_frame = ctk.CTkFrame(parent_frame)
+            error_frame.pack(anchor=anchor, pady=(5, 10), padx=10)
+            
+            error_label = ctk.CTkLabel(
+                error_frame,
+                text=f"🖼️ [Base64 이미지 처리 실패: {filename}]",
+                font=ctk.CTkFont(size=12, slant="italic"),
+                text_color="gray"
             )
-            fallback_label.pack(padx=10, pady=(10, 5), anchor=anchor)
-
+            error_label.pack(padx=10, pady=5)
+    
     def _create_direct_image(self, parent_frame, pil_image, filename, original_size, image_path, anchor):
         """이미지를 직접 표시 (PIL 이미지 사용)"""
         try:
-            print(f"DEBUG: _create_direct_image 시작 - {filename}")
-            print(f"DEBUG: PIL 이미지 모드: {pil_image.mode}")
-            print(f"DEBUG: PIL 이미지 크기: {pil_image.size}")
-            print(f"DEBUG: 원본 크기: {original_size}")
+            # 적절한 크기로 리사이즈 (최대 300x300)
+            max_size = 300
+            display_image = pil_image.copy()
             
-            # 이미지 컨테이너 프레임
+            if original_size[0] > max_size or original_size[1] > max_size:
+                # 크로스 플랫폼 이미지 리사이징
+                try:
+                    # Python 3.10+ PIL 사용
+                    display_image.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
+                except (AttributeError, NameError):
+                    # 이전 버전 호환성
+                    try:
+                        import PIL.Image
+                        display_image.thumbnail((max_size, max_size), PIL.Image.LANCZOS)
+                    except (AttributeError, ImportError):
+                        # 기본 리샘플링 사용
+                        display_image.thumbnail((max_size, max_size))
+            
+            # tkinter PhotoImage로 변환
+            photo = ImageTk.PhotoImage(display_image)
+            
+            # 이미지 프레임
             image_frame = ctk.CTkFrame(parent_frame)
-            image_frame.pack(padx=10, pady=(10, 5), anchor=anchor)
-            print(f"DEBUG: 이미지 프레임 생성 완료")
+            image_frame.pack(anchor=anchor, pady=(5, 10), padx=10)
             
-            # PIL 이미지를 PhotoImage로 변환 (RGB 모드로 변환하여 호환성 확보)
-            print(f"DEBUG: PIL 이미지 모드 변환 시작")
-            if pil_image.mode != 'RGB':
-                print(f"DEBUG: {pil_image.mode} -> RGB 변환")
-                pil_image = pil_image.convert('RGB')
+            # 파일명 라벨
+            filename_label = ctk.CTkLabel(
+                image_frame,
+                text=f"📁 {filename}",
+                font=ctk.CTkFont(size=10),
+                text_color="gray"
+            )
+            filename_label.pack(padx=5, pady=(5, 0))
             
-            # PIL ImageTk 문제 우회: 임시 파일로 저장 후 tkinter PhotoImage 사용
-            print(f"DEBUG: 임시 파일 방식으로 이미지 처리 시작")
-            
-            # 임시 파일 경로 생성
-            temp_dir = tempfile.gettempdir()
-            temp_filename = f"temp_display_{filename}_{int(time.time())}.png"
-            temp_display_path = os.path.join(temp_dir, temp_filename)
-            
-            # PIL 이미지를 임시 파일로 저장
-            if pil_image.mode in ('RGBA', 'LA'):
-                # 투명도가 있는 이미지는 RGB로 변환 (흰 배경 합성)
-                background = Image.new('RGB', pil_image.size, (255, 255, 255))
-                background.paste(pil_image, mask=pil_image.split()[-1] if pil_image.mode == 'RGBA' else None)
-                background.save(temp_display_path, 'PNG')
-            else:
-                pil_image.save(temp_display_path, 'PNG')
-            
-            print(f"DEBUG: 임시 파일 저장 완료: {temp_display_path}")
-            
-            # tkinter PhotoImage로 로드 (PIL ImageTk 대신)
-            try:
-                photo = tk.PhotoImage(file=temp_display_path)
-                print(f"DEBUG: tkinter PhotoImage 로드 완료")
-            except Exception as photo_error:
-                print(f"DEBUG: tkinter PhotoImage 로드 실패: {photo_error}")
-                raise photo_error
-            
-            # Canvas로 이미지 표시
-            print(f"DEBUG: Canvas 생성 시작")
-            # PhotoImage 크기 사용
-            canvas_width = photo.width()
-            canvas_height = photo.height()
-            print(f"DEBUG: Canvas 크기 - width: {canvas_width}, height: {canvas_height}")
+            # 이미지 캔버스
+            canvas_width = display_image.size[0] + 20
+            canvas_height = display_image.size[1] + 20
             
             canvas = tk.Canvas(
                 image_frame,
                 width=canvas_width,
                 height=canvas_height,
-                bg="#2b2b2b",  # 고정된 다크 배경색
                 highlightthickness=0,
-                borderwidth=0,
-                relief="flat",
-                cursor="hand2"
+                bg="#212121"
             )
-            print(f"DEBUG: Canvas 생성 완료")
-            canvas.pack(padx=5, pady=5)
-            print(f"DEBUG: Canvas pack 완료")
+            canvas.pack(padx=10, pady=(5, 10))
             
-            # Canvas에 이미지 표시
-            print(f"DEBUG: Canvas에 이미지 표시 시작")
+            # 이미지를 캔버스 중앙에 배치
             canvas.create_image(
                 canvas_width // 2,
                 canvas_height // 2,
                 image=photo,
-                anchor="center"
+                anchor='center'
             )
-            print(f"DEBUG: Canvas 이미지 표시 완료")
-            canvas.photo = photo  # 가비지 컬렉션 방지
             
-            # 이미지 정보 라벨
-            info_label = ctk.CTkLabel(
-                image_frame,
-                text=f"{filename} ({original_size[0]}×{original_size[1]})",
-                font=ctk.CTkFont(size=10),
-                text_color="gray"
-            )
-            info_label.pack(padx=5, pady=(0, 5))
+            # 이미지 참조 유지
+            canvas.image = photo
             
-            # 클릭 시 원본 이미지 열기
+            # 클릭 이벤트 (원본 크기로 열기)
+            image_path_obj = Path(image_path)
+            
             def open_full_image(event=None):
+                """원본 크기 이미지를 새 창에서 열기"""
                 try:
-                    # 기본 이미지 뷰어로 열기
-                    if sys.platform == "darwin":  # macOS
-                        os.system(f'open "{image_path}"')
-                    elif sys.platform == "win32":  # Windows
-                        os.startfile(image_path)
-                    else:  # Linux
-                        os.system(f'xdg-open "{image_path}"')
+                    # 크로스 플랫폼 임시 디렉토리 처리
+                    temp_dir = Path(tempfile.gettempdir())
+                    temp_filename = f"fullsize_{int(time.time())}_{filename}"
+                    temp_display_path = temp_dir / temp_filename
+                    
+                    # 원본 이미지를 임시 파일로 저장
+                    pil_image.save(temp_display_path, "PNG")
+                    
+                    # 새 창 생성
+                    image_window = ctk.CTkToplevel(self.root)
+                    image_window.title(f"이미지: {filename}")
+                    image_window.geometry("800x600")
+                    
+                    # 전체화면 이미지 표시
+                    full_photo = ImageTk.PhotoImage(pil_image)
+                    
+                    full_canvas = tk.Canvas(
+                        image_window,
+                        bg="#212121",
+                        highlightthickness=0
+                    )
+                    full_canvas.pack(fill="both", expand=True)
+                    
+                    full_canvas.create_image(
+                        0, 0,
+                        image=full_photo,
+                        anchor='nw'
+                    )
+                    
+                    full_canvas.image = full_photo
+                    
+                    # 임시 파일 정리 함수
+                    def cleanup_temp_file():
+                        try:
+                            if temp_display_path.exists():
+                                temp_display_path.unlink()
+                        except Exception:
+                            pass
+                    
+                    # 창 닫힐 때 임시 파일 정리
+                    image_window.protocol("WM_DELETE_WINDOW", lambda: [cleanup_temp_file(), image_window.destroy()])
+                    
                 except Exception as e:
-                    print(f"이미지 열기 실패: {e}")
+                    messagebox.showerror("오류", f"이미지를 열 수 없습니다: {e}")
             
-            # 클릭 이벤트 바인딩 (Canvas와 프레임에)
-            print(f"DEBUG: 클릭 이벤트 바인딩 시작")
-            canvas.bind("<Button-1>", open_full_image)
-            image_frame.bind("<Button-1>", open_full_image)
-            
-            # 호버 효과 추가
+            # 마우스 호버 효과
             def on_enter(event):
                 canvas.configure(cursor="hand2")
-                
+            
             def on_leave(event):
                 canvas.configure(cursor="")
-                
+            
+            canvas.bind("<Button-1>", open_full_image)
+            canvas.bind("<Double-Button-1>", open_full_image)
             canvas.bind("<Enter>", on_enter)
             canvas.bind("<Leave>", on_leave)
-            print(f"DEBUG: 클릭 이벤트 바인딩 완료")
-            
-            # 임시 파일 정리 (5초 후)
-            def cleanup_temp_file():
-                try:
-                    if os.path.exists(temp_display_path):
-                        os.remove(temp_display_path)
-                        print(f"DEBUG: 임시 파일 정리 완료: {temp_display_path}")
-                except:
-                    pass
-            
-            # 5초 후 임시 파일 정리
-            threading.Timer(5.0, cleanup_temp_file).start()
-            print(f"DEBUG: 이미지 표시 완료")
             
         except Exception as e:
-            # 직접 표시 실패 시 텍스트로 대체
-            import traceback
-            print(f"DEBUG: 이미지 직접 표시 실패 - 상세 오류:")
-            print(f"DEBUG: Exception type: {type(e).__name__}")
-            print(f"DEBUG: Exception message: {str(e)}")
-            print(f"DEBUG: Traceback:")
-            traceback.print_exc()
+            # 이미지 표시 실패
+            error_frame = ctk.CTkFrame(parent_frame)
+            error_frame.pack(anchor=anchor, pady=(5, 10), padx=10)
             
-            fallback_label = ctk.CTkLabel(
-                parent_frame,
-                text=f"🖼️ {filename} ({original_size[0]}×{original_size[1]})",
-                font=ctk.CTkFont(size=12),
-                anchor=anchor
+            error_label = ctk.CTkLabel(
+                error_frame,
+                text=f"🖼️ [이미지 표시 실패: {filename}] - {str(e)[:50]}",
+                font=ctk.CTkFont(size=12, slant="italic"),
+                text_color="gray"
             )
-            fallback_label.pack(padx=10, pady=(10, 5), anchor=anchor)
-            print(f"이미지 직접 표시 실패: {e}")
-
+            error_label.pack(padx=10, pady=5)
+    
     def attach_image(self):
         """이미지 첨부"""
         if not self.current_room:

@@ -98,6 +98,9 @@ class ChatManager:
     def save_chat_rooms(self) -> None:
         """채팅방 데이터 저장"""
         try:
+            # 디렉토리가 존재하지 않으면 생성
+            self.data_dir.mkdir(exist_ok=True)
+            
             data = {
                 "rooms": [room.to_dict() for room in self.chat_rooms.values()]
             }
