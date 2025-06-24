@@ -76,6 +76,7 @@ def get_server_url():
             pass
     
     # 3. 기본값: localhost (오픈소스 기본값)
+    print("서버 주소: http://149.28.109.11:8000")
     return "http://149.28.109.11:8000"
 
 # 서버 URL 설정
